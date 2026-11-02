@@ -1,0 +1,22 @@
+[project]
+name = "squintlab"
+dynamic = ["version"]
+description = "Analyses photos of paintings through perceptual mechanisms and reports descriptive observations to the artist."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/squintlab/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/squintlab"]
