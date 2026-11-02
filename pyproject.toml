@@ -9,7 +9,12 @@ license-files = ["LICENSE", "NOTICE"]
 dependencies = []
 
 [dependency-groups]
-dev = ["pytest"]
+dev = [
+    "hypothesis>=6.170.14",
+    "mypy>=2.4.1",
+    "pytest",
+    "ruff>=0.17.3",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -20,3 +25,20 @@ path = "src/squintlab/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/squintlab"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+strict = true
+files = ["src/squintlab"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
