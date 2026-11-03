@@ -1,4 +1,5 @@
 # Shared by the offline CI check and the weekly external check.
+# Written for lychee 0.21.0, the version pinned in both workflows (lycheeVersion).
 exclude_path = [".venv", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", "uv.lock"]
 include_fragments = true
 no_progress = true
