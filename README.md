@@ -23,6 +23,10 @@ You give squintlab a photo of a painting, the painting's size and your viewing d
 - No stereo, motion-parallax or paint-relief analysis.
 - It is not a painting app: no style transfer and no automatic correction.
 
+## Your images stay on your computer
+
+squintlab runs entirely on your own computer. It never uploads, collects or shares your images, your results or anything about you, and it has no accounts, telemetry or analytics. Analysing a painting makes no network connection at all, so nothing you analyse can be used to train AI models. The only files it writes are the report and exports you ask for, in the folder you choose. The one feature that uses the network is the optional download of public-domain museum images for the benchmark tests, and it never sends your files anywhere.
+
 ## Scientific basis
 
 Perceptual lightness is CIELAB L\*, computed from luminance. It is never a naive greyscale average of the red, green and blue values. Vision is described with a two-pathway account: one route that is sensitive to luminance and to where things are, and one that carries colour and fine detail. This is used as a model of effects (why a picture can look unstable or flat), not as a map of the brain.
