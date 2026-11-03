@@ -1,0 +1,4 @@
+# Shared by the offline CI check and the weekly external check.
+exclude_path = [".venv", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", "uv.lock"]
+include_fragments = true
+no_progress = true
