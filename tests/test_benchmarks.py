@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import json
 import threading
 from collections.abc import Iterator
 from dataclasses import replace
@@ -13,9 +15,13 @@ import pytest
 from squintlab.benchmarks import (
     USER_AGENT,
     BenchmarkImage,
+    DownloadBlockedError,
+    FetchResult,
     HashMismatchError,
     ManifestError,
+    SizeMismatchError,
     fetch_image,
+    import_file,
     load_manifest,
     parse_manifest,
     resolve_cache_dir,
@@ -44,6 +50,9 @@ def server() -> Iterator[FileServer]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             requests.append({k: v for k, v in self.headers.items()})
+            if self.path == "/blocked.jpg":
+                self.send_error(403)
+                return
             if self.path != "/image.jpg":
                 self.send_error(404)
                 return
@@ -76,6 +85,7 @@ def make_image(url: str, sha256: str = PAYLOAD_SHA) -> BenchmarkImage:
         licence="CC0",
         object_url="https://example.org/object",
         download_url=url,
+        access="script",
         width=16,
         height=16,
         chroma_subsampling="4:2:0",
@@ -104,6 +114,8 @@ def test_user_agent_names_project_without_personal_details(
     fetch_image(make_image(server.url), tmp_path)
     sent = server.requests[0]["User-Agent"]
     assert sent == USER_AGENT
+    lowered = {k.lower(): v for k, v in server.requests[0].items()}
+    assert lowered["aic-user-agent"] == USER_AGENT
     assert "squintlab" in sent
     assert "https://github.com/marcemac/squintlab" in sent
     assert "@" not in sent
@@ -153,6 +165,17 @@ def test_http_error_leaves_nothing(server: FileServer, tmp_path: Path) -> None:
     assert list(tmp_path.iterdir()) == []
 
 
+def test_403_names_object_page_and_import_command(server: FileServer, tmp_path: Path) -> None:
+    image = replace(make_image(server.url), download_url=server.url.replace("image", "blocked"))
+    with pytest.raises(DownloadBlockedError) as excinfo:
+        fetch_image(image, tmp_path)
+    message = str(excinfo.value)
+    assert "127.0.0.1 blocks scripted downloads" in message
+    assert image.object_url in message
+    assert "--import test-image" in message
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_non_http_scheme_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="scheme"):
         fetch_image(make_image("file:///etc/passwd"), tmp_path)
@@ -162,6 +185,64 @@ def test_cache_folder_is_created(server: FileServer, tmp_path: Path) -> None:
     cache = tmp_path / "a" / "b"
     fetch_image(make_image(server.url), cache)
     assert (cache / "test-image.jpg").exists()
+
+
+# --- import -----------------------------------------------------------------
+
+
+def test_import_accepts_the_right_file(tmp_path: Path) -> None:
+    source = tmp_path / "downloads" / "browser-name (1).jpg"
+    source.parent.mkdir()
+    source.write_bytes(PAYLOAD)
+    cache = tmp_path / "cache"
+    result = import_file(make_image("https://example.org/d.jpg"), source, cache)
+    assert result.path == cache / "test-image.jpg"
+    assert result.path.read_bytes() == PAYLOAD
+    assert result.imported is True
+    assert result.verified is True
+    assert [p.name for p in cache.iterdir()] == ["test-image.jpg"]
+    assert source.read_bytes() == PAYLOAD  # the original is copied, not moved
+
+
+def test_import_rejects_wrong_content_of_the_right_size(tmp_path: Path) -> None:
+    source = tmp_path / "wrong.jpg"
+    source.write_bytes(bytes(len(PAYLOAD)))
+    cache = tmp_path / "cache"
+    with pytest.raises(HashMismatchError) as excinfo:
+        import_file(make_image("https://example.org/d.jpg"), source, cache)
+    assert "test-image" in str(excinfo.value)
+    assert PAYLOAD_SHA in str(excinfo.value)
+    assert not cache.exists() or list(cache.iterdir()) == []
+
+
+def test_import_rejects_wrong_size(tmp_path: Path) -> None:
+    source = tmp_path / "short.jpg"
+    source.write_bytes(PAYLOAD[:-1])
+    cache = tmp_path / "cache"
+    with pytest.raises(SizeMismatchError) as excinfo:
+        import_file(make_image("https://example.org/d.jpg"), source, cache)
+    assert str(len(PAYLOAD)) in str(excinfo.value)
+    assert str(len(PAYLOAD) - 1) in str(excinfo.value)
+    assert not cache.exists() or list(cache.iterdir()) == []
+
+
+def test_refused_import_keeps_existing_cached_file(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "test-image.jpg").write_bytes(b"old")
+    source = tmp_path / "wrong.jpg"
+    source.write_bytes(bytes(len(PAYLOAD)))
+    with pytest.raises(HashMismatchError):
+        import_file(make_image("https://example.org/d.jpg"), source, cache)
+    assert [p.name for p in cache.iterdir()] == ["test-image.jpg"]
+    assert (cache / "test-image.jpg").read_bytes() == b"old"
+
+
+def test_import_of_missing_file_leaves_nothing(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    with pytest.raises(FileNotFoundError):
+        import_file(make_image("https://example.org/d.jpg"), tmp_path / "nope.jpg", cache)
+    assert not cache.exists() or list(cache.iterdir()) == []
 
 
 # --- cache folder order -----------------------------------------------------
@@ -246,6 +327,7 @@ def valid_entry() -> dict[str, Any]:
         "licence": "CC0",
         "object_url": "https://example.org/o",
         "download_url": "https://example.org/d.jpg",
+        "access": "script",
         "width": 100,
         "height": 80,
         "chroma_subsampling": "4:2:0",
@@ -259,6 +341,7 @@ def valid_entry() -> dict[str, Any]:
 def test_repository_manifest_is_valid() -> None:
     images = load_manifest(REPO_ROOT / "benchmarks" / "manifest.toml")
     first = images[0]
+    assert first.access == "script"
     assert first.id == "aic-poppy-field-giverny"
     assert first.width == 3000
     assert first.height == 1948
@@ -289,6 +372,7 @@ def test_valid_entry_parses() -> None:
         ("sha256", "G" * 64),
         ("sha256", "A" * 64),
         ("chroma_subsampling", "4:9:9"),
+        ("access", "sometimes"),
         ("download_url", "http://example.org/d.jpg"),
         ("download_url", "not a url"),
         ("object_url", "ftp://example.org/o"),
@@ -349,6 +433,94 @@ def test_missing_manifest_file_is_rejected(tmp_path: Path) -> None:
 def test_fetch_aic_poppy_field(tmp_path: Path) -> None:
     images = {i.id: i for i in load_manifest(REPO_ROOT / "benchmarks" / "manifest.toml")}
     image = images["aic-poppy-field-giverny"]
-    result = fetch_image(image, tmp_path)
+    try:
+        result = fetch_image(image, tmp_path)
+    except DownloadBlockedError as error:
+        pytest.skip(f"host answered HTTP 403 and blocks scripted downloads: {error}")
     assert result.verified is True
     assert result.path.stat().st_size == image.size_bytes
+
+
+# --- command-line script ----------------------------------------------------
+
+
+def load_script() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "fetch_benchmarks_script", REPO_ROOT / "scripts" / "fetch_benchmarks.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_manifest(path: Path, access: str, image_id: str = "manual-one") -> Path:
+    entry = valid_entry() | {"id": image_id, "access": access}
+    lines = ["[[images]]"]
+    for key, value in entry.items():
+        lines.append(f"{key} = {value!r}".replace("'", '"'))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_fetch_all_skips_manual_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = load_script()
+    manifest = write_manifest(tmp_path / "manifest.toml", access="manual")
+    monkeypatch.setenv("SQUINTLAB_CACHE_DIR", str(tmp_path / "cache"))
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise AssertionError("manual entry must not be downloaded")
+
+    monkeypatch.setattr(script, "fetch_image", fail)
+    assert script.main(["--manifest", str(manifest)]) == 0
+    out = capsys.readouterr().out
+    assert "manual-one: skipped" in out
+    assert "https://example.org/o" in out
+    assert "--import manual-one" in out
+
+
+def test_manual_entry_is_fetched_when_asked_for_by_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = load_script()
+    manifest = write_manifest(tmp_path / "manifest.toml", access="manual")
+    monkeypatch.setenv("SQUINTLAB_CACHE_DIR", str(tmp_path / "cache"))
+    calls: list[str] = []
+
+    def fake(image: BenchmarkImage, cache_dir: Path) -> FetchResult:
+        calls.append(image.id)
+        return FetchResult(image.id, cache_dir / "x.jpg", downloaded=True, verified=True)
+
+    monkeypatch.setattr(script, "fetch_image", fake)
+    assert script.main(["--manifest", str(manifest), "--id", "manual-one"]) == 0
+    assert calls == ["manual-one"]
+
+
+def test_script_import_accepts_and_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = load_script()
+    entry = valid_entry() | {"id": "manual-one", "size_bytes": len(PAYLOAD), "sha256": PAYLOAD_SHA}
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        "[[images]]\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in entry.items()),
+        encoding="utf-8",
+    )
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("SQUINTLAB_CACHE_DIR", str(cache))
+    good = tmp_path / "good.jpg"
+    good.write_bytes(PAYLOAD)
+    bad = tmp_path / "bad.jpg"
+    bad.write_bytes(bytes(len(PAYLOAD)))
+
+    assert script.main(["--manifest", str(manifest), "--import", "manual-one", str(bad)]) == 1
+    assert not cache.exists() or list(cache.iterdir()) == []
+    assert "REFUSED" in capsys.readouterr().err
+
+    assert script.main(["--manifest", str(manifest), "--import", "manual-one", str(good)]) == 0
+    assert (cache / "manual-one.jpg").read_bytes() == PAYLOAD
+    assert "imported" in capsys.readouterr().out
+
+    assert script.main(["--manifest", str(manifest), "--import", "other", str(good)]) == 2

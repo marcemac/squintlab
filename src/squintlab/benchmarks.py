@@ -12,12 +12,13 @@ import os
 import re
 import tempfile
 import tomllib
+import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, BinaryIO, Final, Literal
 from urllib.parse import urlparse
 
 import platformdirs
@@ -33,6 +34,7 @@ _CHUNK_SIZE: Final = 1024 * 1024
 _TIMEOUT_SECONDS: Final = 60
 _ID_PATTERN: Final = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _SHA256_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
+_ACCESS_VALUES: Final = frozenset({"script", "manual"})
 _CHROMA_SUBSAMPLING: Final = frozenset({"4:4:4", "4:2:2", "4:2:0", "4:4:0", "4:1:1", "gray"})
 
 
@@ -41,13 +43,27 @@ class ManifestError(ValueError):
 
 
 class HashMismatchError(Exception):
-    """A downloaded file did not have the SHA-256 recorded in the manifest."""
+    """A downloaded or imported file did not have the SHA-256 recorded in the manifest."""
 
     def __init__(self, image_id: str, expected: str, actual: str) -> None:
         super().__init__(f"{image_id}: SHA-256 mismatch: expected {expected}, got {actual}")
         self.image_id = image_id
         self.expected = expected
         self.actual = actual
+
+
+class SizeMismatchError(ValueError):
+    """An imported file did not have the size recorded in the manifest."""
+
+    def __init__(self, image_id: str, expected: int, actual: int) -> None:
+        super().__init__(f"{image_id}: size mismatch: expected {expected} bytes, got {actual}")
+        self.image_id = image_id
+        self.expected = expected
+        self.actual = actual
+
+
+class DownloadBlockedError(OSError):
+    """The host answered HTTP 403: it refuses scripted downloads."""
 
 
 @dataclass(frozen=True)
@@ -60,6 +76,7 @@ class BenchmarkImage:
     licence: str
     object_url: str
     download_url: str
+    access: str  # "script": fetched by the tool; "manual": host blocks scripts, skipped by default
     width: int
     height: int
     chroma_subsampling: str
@@ -82,6 +99,7 @@ class FetchResult:
     path: Path
     downloaded: bool  # False when a verified copy was already in the cache
     verified: bool
+    imported: bool = False  # True when the file was copied in by hand with import_file
 
 
 # --- manifest ---------------------------------------------------------------
@@ -137,6 +155,10 @@ def _parse_image(entry: object, index: int) -> BenchmarkImage:
     if chroma not in _CHROMA_SUBSAMPLING:
         allowed = ", ".join(sorted(_CHROMA_SUBSAMPLING))
         raise ManifestError(f"{where}: chroma_subsampling must be one of {allowed}")
+    access = _text(entry, "access", where)
+    if access not in _ACCESS_VALUES:
+        allowed = ", ".join(sorted(_ACCESS_VALUES))
+        raise ManifestError(f"{where}: access must be one of {allowed}")
     checked_on = _text(entry, "checked_on", where)
     try:
         date.fromisoformat(checked_on)
@@ -152,6 +174,7 @@ def _parse_image(entry: object, index: int) -> BenchmarkImage:
         licence=_text(entry, "licence", where),
         object_url=_https_url(entry, "object_url", where),
         download_url=_https_url(entry, "download_url", where),
+        access=access,
         width=_positive_int(entry, "width", where),
         height=_positive_int(entry, "height", where),
         chroma_subsampling=chroma,
@@ -258,37 +281,78 @@ def is_cached(image: BenchmarkImage, cache_dir: Path) -> bool:
     return target.is_file() and _sha256_of_file(target) == image.sha256
 
 
-def fetch_image(image: BenchmarkImage, cache_dir: Path) -> FetchResult:
-    """Download ``image`` into ``cache_dir`` unless a verified copy is already there.
+def import_command(image_id: str) -> str:
+    return f"uv run python scripts/fetch_benchmarks.py --import {image_id} <file>"
 
-    The data goes to a temporary file in ``cache_dir`` and is renamed into place only if
-    its SHA-256 matches the manifest. On a mismatch, or any other failure, the temporary
-    file is deleted and an exception is raised.
+
+def _store_verified(image: BenchmarkImage, source: BinaryIO, cache_dir: Path) -> Path:
+    """Copy ``source`` to a temporary file in ``cache_dir``; rename it into place if it verifies.
+
+    The SHA-256 is computed while copying. On a mismatch, or any other failure, the
+    temporary file is deleted and any existing cached file is left untouched.
     """
-    target = cached_path(image, cache_dir)
-    if is_cached(image, cache_dir):
-        return FetchResult(image.id, target, downloaded=False, verified=True)
-
-    scheme = urlparse(image.download_url).scheme
-    if scheme not in ("http", "https"):
-        raise ValueError(f"{image.id}: unsupported URL scheme {scheme!r}")
-
     cache_dir.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(image.download_url, headers={"User-Agent": USER_AGENT})
     handle, temp_name = tempfile.mkstemp(dir=cache_dir, prefix=f".{image.id}-", suffix=".part")
     temp_path = Path(temp_name)
     try:
         digest = hashlib.sha256()
         with os.fdopen(handle, "wb") as out:
-            with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as response:
-                while chunk := response.read(_CHUNK_SIZE):
-                    digest.update(chunk)
-                    out.write(chunk)
+            while chunk := source.read(_CHUNK_SIZE):
+                digest.update(chunk)
+                out.write(chunk)
         actual = digest.hexdigest()
         if actual != image.sha256:
             raise HashMismatchError(image.id, image.sha256, actual)
+        target = cached_path(image, cache_dir)
         temp_path.replace(target)
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
-    return FetchResult(image.id, target, downloaded=True, verified=True)
+    return target
+
+
+def fetch_image(image: BenchmarkImage, cache_dir: Path) -> FetchResult:
+    """Download ``image`` into ``cache_dir`` unless a verified copy is already there.
+
+    The data goes to a temporary file in ``cache_dir`` and is renamed into place only if
+    its SHA-256 matches the manifest. On a mismatch, or any other failure, the temporary
+    file is deleted and an exception is raised. An HTTP 403 raises
+    :class:`DownloadBlockedError`, which points to the object page and the import command.
+    """
+    target = cached_path(image, cache_dir)
+    if is_cached(image, cache_dir):
+        return FetchResult(image.id, target, downloaded=False, verified=True)
+
+    parsed = urlparse(image.download_url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"{image.id}: unsupported URL scheme {parsed.scheme!r}")
+
+    request = urllib.request.Request(
+        image.download_url, headers={"User-Agent": USER_AGENT, "AIC-User-Agent": USER_AGENT}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as response:
+            stored = _store_verified(image, response, cache_dir)
+    except urllib.error.HTTPError as error:
+        if error.code != 403:
+            raise
+        raise DownloadBlockedError(
+            f"{image.id}: {parsed.hostname} blocks scripted downloads (HTTP 403). "
+            f"Download the image in a browser from {image.object_url} and then run: "
+            f"{import_command(image.id)}"
+        ) from error
+    return FetchResult(image.id, stored, downloaded=True, verified=True)
+
+
+def import_file(image: BenchmarkImage, source: Path, cache_dir: Path) -> FetchResult:
+    """Copy a hand-downloaded file into ``cache_dir`` after checking its size and SHA-256.
+
+    A file that does not match the manifest is refused: nothing is left behind and any
+    existing cached copy is kept.
+    """
+    actual_size = source.stat().st_size
+    if actual_size != image.size_bytes:
+        raise SizeMismatchError(image.id, image.size_bytes, actual_size)
+    with source.open("rb") as handle:
+        stored = _store_verified(image, handle, cache_dir)
+    return FetchResult(image.id, stored, downloaded=False, verified=True, imported=True)

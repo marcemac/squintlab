@@ -11,6 +11,9 @@ object_number = "1922.4465"
 licence = "CC0"
 object_url = "https://www.artic.edu/artworks/4783/poppy-field-giverny"
 download_url = "https://www.artic.edu/iiif/2/db94c894-a24c-c2e0-9db9-0506567a0152/full/!3000,3000/0/default.jpg"
+# "script": scripts/fetch_benchmarks.py downloads it; "manual": the host blocks scripted
+# downloads, so fetching all images skips it.
+access = "script"
 width = 3000
 height = 1948
 chroma_subsampling = "4:2:0"
