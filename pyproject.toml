@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
-dependencies = []
+dependencies = [
+    "platformdirs>=4.14.3",
+]
 
 [dependency-groups]
 dev = [
@@ -42,3 +44,4 @@ files = ["src/squintlab"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["network: test needs internet access (use --run-network)"]
