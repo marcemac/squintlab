@@ -33,6 +33,14 @@ Perceptual lightness is CIELAB L\*, computed from luminance. It is never a naive
 
 The ideas follow Margaret Livingstone's book *Vision and Art: The Biology of Seeing*, revised edition (Abrams, 2014), cited by reference only. Primary research is cited on each analysis. Design choices and their costs are recorded in [DECISIONS.md](DECISIONS.md), and planned work is in [ROADMAP.md](ROADMAP.md).
 
+## Installation
+
+```bash
+pip install squintlab
+```
+
+Version 0.0.1 is a pre-alpha scaffold. It contains the package skeleton, the benchmark manifest and the fetch tool, and nothing else yet. It has no analyses and produces no reports. They arrive in later versions.
+
 ## Status
 
 Pre-alpha, working towards v0.1.
