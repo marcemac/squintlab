@@ -31,7 +31,15 @@ squintlab runs entirely on your own computer. It never uploads, collects or shar
 
 Perceptual lightness is CIELAB L\*, computed from luminance. It is never a naive greyscale average of the red, green and blue values. Vision is described with a two-pathway account: one route that is sensitive to luminance and to where things are, and one that carries colour and fine detail. This is used as a model of effects (why a picture can look unstable or flat), not as a map of the brain.
 
-The ideas follow Margaret Livingstone's book *Vision and Art: The Biology of Seeing*, revised edition (Abrams, 2014), cited by reference only. Primary research is cited on each analysis. Design choices and their costs are recorded in [DECISIONS.md](DECISIONS.md), and planned work is in [ROADMAP.md](ROADMAP.md).
+The ideas follow Margaret Livingstone's book *Vision and Art: The Biology of Seeing*, revised edition (Abrams, 2014), cited by reference only. Primary research is cited on each analysis. Design choices and their costs are recorded in [DECISIONS.md](https://github.com/marcemac/squintlab/blob/main/DECISIONS.md), and planned work is in [ROADMAP.md](https://github.com/marcemac/squintlab/blob/main/ROADMAP.md).
+
+## Installation
+
+```bash
+pip install squintlab
+```
+
+Version 0.0.1 is a pre-alpha scaffold. It contains the package skeleton, the benchmark manifest and the fetch tool, and nothing else yet. It has no analyses and produces no reports. They arrive in later versions.
 
 ## Status
 
@@ -49,4 +57,4 @@ uv run mypy
 
 ## Licence
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache-2.0. See [LICENSE](https://github.com/marcemac/squintlab/blob/main/LICENSE) and [NOTICE](https://github.com/marcemac/squintlab/blob/main/NOTICE).
