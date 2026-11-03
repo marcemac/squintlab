@@ -276,28 +276,64 @@ def test_empty_env_var_is_ignored(tmp_path: Path) -> None:
     assert location.source == "config"
 
 
-def test_default_used_when_nothing_else_is_set(tmp_path: Path) -> None:
-    location = resolve_cache_dir(env={}, config_path=tmp_path / "missing.toml")
+@pytest.fixture
+def fake_user_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """Point platformdirs at folders inside tmp_path, whatever the platform.
+
+    squintlab.benchmarks calls platformdirs.user_config_path / user_cache_path, so those
+    are patched where they are looked up. Nothing touches the real user folders.
+    """
+    config_dir = tmp_path / "user-config" / "squintlab"
+    cache_dir = tmp_path / "user-cache" / "squintlab"
+    monkeypatch.setattr(
+        "squintlab.benchmarks.platformdirs.user_config_path", lambda *a, **k: config_dir
+    )
+    monkeypatch.setattr(
+        "squintlab.benchmarks.platformdirs.user_cache_path", lambda *a, **k: cache_dir
+    )
+    monkeypatch.delenv("SQUINTLAB_CACHE_DIR", raising=False)
+    return config_dir, cache_dir
+
+
+def test_default_used_when_nothing_else_is_set(fake_user_dirs: tuple[Path, Path]) -> None:
+    _, cache_dir = fake_user_dirs
+    location = resolve_cache_dir()
     assert location.source == "default"
-    assert "squintlab" in str(location.path)
+    assert location.path == cache_dir
 
 
-def test_default_used_when_config_has_no_cache_dir(tmp_path: Path) -> None:
+def test_default_used_when_config_has_no_cache_dir(
+    tmp_path: Path, fake_user_dirs: tuple[Path, Path]
+) -> None:
     config = tmp_path / "config.toml"
     config.write_text("other = 1\n", encoding="utf-8")
-    assert resolve_cache_dir(env={}, config_path=config).source == "default"
+    location = resolve_cache_dir(env={}, config_path=config)
+    assert location.source == "default"
+    assert location.path == fake_user_dirs[1]
 
 
-def test_default_config_path_comes_from_platformdirs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_default_config_file_comes_from_platformdirs(
+    tmp_path: Path, fake_user_dirs: tuple[Path, Path]
 ) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    monkeypatch.delenv("SQUINTLAB_CACHE_DIR", raising=False)
-    (tmp_path / "squintlab").mkdir()
-    write_config(tmp_path / "squintlab" / "config.toml", tmp_path / "from-config")
+    config_dir, _ = fake_user_dirs
+    config_dir.mkdir(parents=True)
+    config_file = write_config(config_dir / "config.toml", tmp_path / "from-config")
     location = resolve_cache_dir()
     assert location.source == "config"
     assert location.path == tmp_path / "from-config"
+    assert str(config_file) in location.origin
+
+
+def test_env_var_beats_default_config_file(
+    tmp_path: Path, fake_user_dirs: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir, _ = fake_user_dirs
+    config_dir.mkdir(parents=True)
+    write_config(config_dir / "config.toml", tmp_path / "from-config")
+    monkeypatch.setenv("SQUINTLAB_CACHE_DIR", str(tmp_path / "from-env"))
+    location = resolve_cache_dir()
+    assert location.source == "environment"
+    assert location.path == tmp_path / "from-env"
 
 
 def test_invalid_config_file_is_an_error(tmp_path: Path) -> None:
