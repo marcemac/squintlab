@@ -1,0 +1,54 @@
+name: Task
+description: A single unit of work with a test that defines done.
+title: "[Task] "
+body:
+  - type: input
+    id: task-id
+    attributes:
+      label: Task ID
+      description: Milestone and number, for example M1-T03.
+      placeholder: M1-T03
+    validations:
+      required: true
+  - type: textarea
+    id: goal-files
+    attributes:
+      label: Goal and files
+      description: What this task achieves, and the files it is expected to touch.
+    validations:
+      required: true
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: The test that defines done. Numeric tolerances belong in the test itself.
+    validations:
+      required: true
+  - type: input
+    id: depends-on
+    attributes:
+      label: Depends on
+      description: Task IDs that must be merged first, or "none".
+      placeholder: none
+    validations:
+      required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      options:
+        - M0
+        - M1
+        - M2
+        - M3
+        - M4
+        - M5
+        - M6
+        - M7
+        - M8
+        - M9
+        - M10
+        - M11
+        - M12
+    validations:
+      required: true
